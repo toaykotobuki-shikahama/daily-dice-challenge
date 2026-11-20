@@ -4,7 +4,7 @@
  const source=['line','pop'].includes(new URLSearchParams(location.search).get('source'))?new URLSearchParams(location.search).get('source'):'other';
  const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
  const wait=ms=>new Promise(r=>setTimeout(r,reduced?Math.min(ms,30):ms));
- let transport,state,identity={},busy=false,poll,midnight,chosenCampaign=null,spin,previewCount=0;
+ let transport,state,identity={},busy=false,poll,midnight,campaignBoundary,chosenCampaign=null,spin,previewCount=0;
  const patterns={1:[5],2:[1,9],3:[1,5,9],4:[1,3,7,9],5:[1,3,5,7,9],6:[1,3,4,6,7,9]};
  function makeCube(node){Object.entries(patterns).forEach(([n,positions])=>{const face=document.createElement('div');face.className='face '+['','one','two','three','four','five','six'][n];face.setAttribute('aria-hidden','true');positions.forEach(p=>{const dot=document.createElement('i');dot.className='pip';dot.style.gridColumn=String((p-1)%3+1);dot.style.gridRow=String(Math.floor((p-1)/3)+1);face.append(dot);});node.append(face);});}
  makeCube($('dice'));makeCube($('goldDice'));
@@ -18,13 +18,25 @@
  function message(text){$('message').textContent=text;}
  function fail(e){const text={AUTH:'保存済みカードの認証を確認できません。通信が回復しても続く場合はスタッフへご相談ください。',RATE_LIMIT:'少し時間をおいて参加状況を再取得してください。',CONFIG:'公開準備中です。接続先が設定されていません。',STORAGE:'このブラウザに参加記録を保存できません。通常のブラウザで同じURLを開いてください。',STORAGE_FORMAT:'保存済みの参加情報を読み取れません。スタッフへご相談ください。',CAMPAIGN_CONFIGURATION:'キャンペーン設定を確認中です。',SETUP_REQUIRED:'公開準備中です。'}[e.message]||'通信を確認できませんでした。参加状況を再取得してください。抽選済みの場合は記録を復元します。';message(text);$('retry').hidden=false;$('roll').disabled=true;}
  function buildStamps(target,total){$('stamps').replaceChildren();for(let i=1;i<=target;i++){const node=document.createElement('div');node.className='stamp'+(i<=total?' filled':'');node.textContent=i<=total?'✦':String(i);node.setAttribute('aria-label',i+'個目 '+(i<=total?'獲得済み':'未獲得'));$('stamps').append(node);}}
- function render(r){state=r;clearTimeout(poll);clearTimeout(midnight);const c=r.campaign,card=r.card;$('welcome').hidden=!r.previous;const total=card?.total||0;buildStamps(c.target,total);$('total').textContent=total+' / '+c.target;$('remaining').textContent=card?.state==='ACTIVE'||!card?'あと'+(c.target-total)+'個で達成':'達成済み';$('roll').hidden=!!card&&card.state!=='ACTIVE';$('roll').disabled=busy||!card?.canRoll;$('achieved').hidden=card?.state!=='ACHIEVED';$('completed').hidden=card?.state!=='COMPLETED';$('retry').hidden=true;
+ function refreshAtCampaignBoundary(c){
+   clearTimeout(campaignBoundary);
+   if(preview||!c.nextBoundaryAt)return;
+   const delay=Date.parse(c.nextBoundaryAt)-Date.parse(c.serverTime)+1500;
+   if(!Number.isFinite(delay)||delay<=0)return;
+   function recheck(){
+     if(state?.campaign!==c||document.hidden)return;
+     if(busy){campaignBoundary=setTimeout(recheck,1000);return;}
+     refresh();
+   }
+   campaignBoundary=setTimeout(recheck,Math.min(delay,2147483647));
+ }
+ function render(r){state=r;clearTimeout(poll);clearTimeout(midnight);const c=r.campaign,card=r.card;refreshAtCampaignBoundary(c);$('welcome').hidden=!r.previous;const total=card?.total||0;buildStamps(c.target,total);$('total').textContent=total+' / '+c.target;$('remaining').textContent=card?.state==='ACTIVE'||!card?'あと'+(c.target-total)+'個で達成':'達成済み';$('roll').hidden=!!card&&card.state!=='ACTIVE';$('roll').disabled=busy||!card?.canRoll;$('achieved').hidden=card?.state!=='ACHIEVED';$('completed').hidden=card?.state!=='COMPLETED';$('retry').hidden=true;
  if(!c.active&&(!card||card.state==='ACTIVE'))$('result').textContent=c.status==='準備中'?'次回開催の準備中です':'現在のチャレンジ受付は終了しています';
  else if(card?.state==='COMPLETED')$('result').textContent='確認が完了しました';
  else if(card?.state==='ACHIEVED')$('result').textContent='MISSION COMPLETE!';
  else if(card?.todayPlayed&&!card.canRoll)$('result').textContent='本日はチャレンジ済み';
  else $('result').textContent='今日のサイコロを振ってみよう';
- if(card?.todayPlayed&&!card.canRoll&&card.state==='ACTIVE'){message('次回は '+new Date(card.nextAvailableAt).toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})+'（日本時間）から');const delay=new Date(card.nextAvailableAt)-new Date(r.serverTime)+1500;if(delay>0&&delay<86410000)midnight=setTimeout(()=>refresh(),delay);}
+ if(card?.todayPlayed&&!card.canRoll&&card.state==='ACTIVE'&&(!c.dateSchedule||(c.active&&new Date(card.nextAvailableAt)<new Date(c.nextBoundaryAt)))){message('次回は '+new Date(card.nextAvailableAt).toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})+'（日本時間）から');const delay=new Date(card.nextAvailableAt)-new Date(r.serverTime)+1500;if(delay>0&&delay<86410000)midnight=setTimeout(()=>refresh(),delay);}
  if(card?.state==='ACHIEVED'){$('reference').textContent='カード末尾 '+(card.reference||'DEMO0001');$('demoComplete').hidden=!preview;$('code').textContent=preview?'プレビュー用（確認処理不可）':card.confirmationCode?card.confirmationCode.match(/.{1,5}/g).join('-'):'';$('expires').textContent=card.confirmationExpiresAt?'コードの有効期限 '+new Date(card.confirmationExpiresAt).toLocaleTimeString('ja-JP',{timeZone:'Asia/Tokyo'})+'（日本時間）':'';$('reception').textContent=c.receptionOpen?'この画面をスタッフへお見せください':'現在、スタッフ確認の受付は停止しています';if(!preview&&!document.hidden)poll=setTimeout(()=>refresh(true),Math.max(30000,cfg.pollMs));}
  const all=r.campaignCards||[];if(all.length>1){$('campaignPicker').hidden=false;$('campaignSelect').replaceChildren();all.forEach(x=>{const o=document.createElement('option');o.value=x.id;o.textContent=x.id+' '+x.name+(x.state==='ACHIEVED'?'（確認待ち）':x.state==='COMPLETED'?'（完了）':'');o.selected=x.id===c.id;$('campaignSelect').append(o);});}else $('campaignPicker').hidden=true;
  }
